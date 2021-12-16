@@ -1,17 +1,27 @@
 ##### IMPORTS ############################
 import numpy as np
 import cv2
-from scipy.ndimage import rotate
+#from scipy.ndimage import rotate
 from skimage import io
 
+import imutils
+
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
 from tqdm import tqdm
+
+import networkx as nx
+import json
+from networkx.readwrite import json_graph
 
 ##########################################
 
 # Function that makes look plt imshow like cv2 imshow
 def plt_plot_cv2(image,ax=plt) :
+    """
+    Function used to plot images
+    """
     ax.imshow(image.max()-image, cmap="Greys")
 
 def extract_single_template(anchor_cadastre
@@ -19,6 +29,9 @@ def extract_single_template(anchor_cadastre
                             , template_w=500
                             , template_h=500
                            ):
+    """
+    Extract a template from an image given its top left corner coordinates, width and height
+    """
     x_corner = top_left_corner_coordinates[0]
     y_corner = top_left_corner_coordinates[1]
     
@@ -252,7 +265,10 @@ def image_composition(im1
     # creating an image of maximal dimensions
     H = h1+h2
     W = w1+w2
-    composite = np.zeros((H,W))
+    if len(im1.shape) > 2:
+        composite = np.zeros((H,W, 3))
+    else:
+        composite = np.zeros((H,W))
     
     # composing the image matching the homologous points
     composite[np.max([y2-y1, 0]):np.max([y2-y1, 0])+h1
@@ -298,3 +314,578 @@ def image_composition(im1
     # return composite image and updated positions dictionnary
     return composite, label_pos
 
+
+""" Retrieve homologous points including orientation """
+
+def orientation_matching(template
+                         , target
+                         , angles = np.linspace(-20, 20, 40)
+                         , match_method = cv2.TM_CCOEFF_NORMED
+                        ):
+    """
+    Template matching taking into account different possible orientations
+    """
+    best_score = 0.
+    best_angle = None
+    best_loc_on_target = []
+
+    for r in angles:
+        rotated_template = imutils.rotate_bound(template, r)
+
+        res = cv2.matchTemplate(target, rotated_template, match_method)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+
+        if max_val > best_score:
+            # update the maximum score obtained
+            best_score = max_val
+            # update "optimal" match params
+            best_angle = r
+
+            best_loc_on_target = max_loc
+
+    return best_score, best_angle, best_loc_on_target
+
+def shift_template(x, y, template, angle):
+    """
+    Find the new coordinates on an image after rotation
+    """
+
+    x_center_init = template.shape[1]//2
+    y_center_init = template.shape[0]//2
+
+    rotated_template = imutils.rotate_bound(template, angle)
+    x_center_rotated = rotated_template.shape[1]//2
+    y_center_rotated = rotated_template.shape[0]//2
+
+    shifted_x = x-x_center_init
+    shifted_y = y-y_center_init
+
+    rot_mat = np.array([[np.cos(np.deg2rad(angle)), -np.sin(np.deg2rad(angle))], 
+                        [np.sin(np.deg2rad(angle)), np.cos(np.deg2rad(angle))]])
+
+    shifted_x, shifted_y = rot_mat@np.array([shifted_x, shifted_y])
+
+    shifted_x += x_center_rotated
+    shifted_y += y_center_rotated
+    
+    return shifted_x, shifted_y
+
+def get_target_homologous(template
+                          , target
+                          , match_method = cv2.TM_CCOEFF_NORMED
+                          , orientation_match = False
+                          , angles = np.linspace(-20, 20, 40)
+                        ):
+    """
+    Retrieve homologous points from target based on template matching
+    """
+    # define reference corners
+    template_h, template_w = template.shape
+    template_tl = [0,0]
+    template_br = [template_w, template_h]
+    # "LINEAR" MATCHING
+    if not orientation_match:
+        res = cv2.matchTemplate(target, template, match_method)
+        _, best_score, _, best_loc_on_target = cv2.minMaxLoc(res)
+
+    # ORIENTATION MATCHING
+    else:
+        # find best template matching with rotating template
+        best_score, best_angle, best_loc_on_target = orientation_matching(template = template
+                                                                          , target = target
+                                                                          , angles = angles
+                                                                          , match_method = match_method
+                                                                         )
+        # retrieve target corners shifts
+        template_tl = shift_template(template_tl[0], template_tl[1], template, best_angle)
+        template_br = shift_template(template_br[0], template_br[1], template, best_angle)
+
+    # compute target homologous points
+    target_tl = [best_loc_on_target[0]+int(template_tl[0])#+reduced_targ_x_corner
+                 , best_loc_on_target[1]+int(template_tl[1])#+reduced_targ_y_corner
+                ]
+
+    target_br = [best_loc_on_target[0]+int(template_br[0])#+reduced_targ_x_corner
+             , best_loc_on_target[1]+int(template_br[1])#+reduced_targ_y_corner
+            ]
+        
+    return best_score, target_tl, target_br
+
+
+""" Compute pairwise homography from two homologous points and warp 2 images """
+
+def rotate(origin, point, angle):
+    """
+    Rotate a point counterclockwise by a given angle around a given origin.
+
+    The angle should be given in radians.
+    """
+    ox, oy = origin
+    px, py = point
+
+    qx = ox + np.cos(angle) * (px - ox) - np.sin(angle) * (py - oy)
+    qy = oy + np.sin(angle) * (px - ox) + np.cos(angle) * (py - oy)
+    return qx, qy
+
+def vector_alignment(a1 #arrays
+                     , a2
+                     , b1
+                     , b2
+                    ):
+    """
+    Align two vectors from different images
+    """
+    v1 = a1-a2
+    v2 = b1-b2
+
+    norm_v1 = np.linalg.norm(v1)
+    norm_v2 = np.linalg.norm(v2)
+    
+    # Scale !!! Fixed to one for now !!!
+    scale = 1 #norm_v1/norm_v2
+    
+    # Orientation ==> rotate around tl corners 
+    cos = (v1/norm_v1)@(v2/norm_v2).T
+    alpha = -np.arccos(np.clip(cos, -1.0, 1.0)) # rad | use np.rad2deg(alpha) for conversion
+    # TODO !!!! ?
+    alpha = np.sign((a1-b1)[1])*alpha
+        
+    # Translation ==> translate image corresponding to b1
+    s_b1 = b1*scale
+    sr_b1 = np.array(rotate((0,0), s_b1, alpha))
+    #r_a1 = np.array(rotate((0,0), a1, curr_angle))
+    translation_vector = a1-sr_b1
+        
+    # compute homography matrix
+    H = np.zeros((3,3))
+    H[0,:] = np.array([scale*np.cos(alpha), -scale*np.sin(alpha),translation_vector[0]])
+    H[1,:] = np.array([scale*np.sin(alpha), scale*np.cos(alpha) ,translation_vector[1]])
+    H[2,:] = np.array([0.                 , 0.                  , 1.                  ])
+    
+    return scale, np.rad2deg(alpha), translation_vector, H
+
+
+def warpTwoImages(img1, img2, H):
+    """
+    warp img2 to img1 with homograph H
+    from https://stackoverflow.com/questions/13063201/how-to-show-the-whole-image-when-using-opencv-warpperspective
+    """
+    h1,w1 = img1.shape[:2]
+    h2,w2 = img2.shape[:2]
+    pts1 = np.float32([[0,0],[0,h1],[w1,h1],[w1,0]]).reshape(-1,1,2)
+    pts2 = np.float32([[0,0],[0,h2],[w2,h2],[w2,0]]).reshape(-1,1,2)
+    pts2_ = cv2.perspectiveTransform(pts2, H)
+    pts = np.concatenate((pts1, pts2_), axis=0)
+    [xmin, ymin] = np.int32(pts.min(axis=0).ravel() - 0.5)
+    [xmax, ymax] = np.int32(pts.max(axis=0).ravel() + 0.5)
+    t = [-xmin,-ymin]
+    Ht = np.array([[1,0,t[0]],[0,1,t[1]],[0,0,1]]) # translate
+
+    result = cv2.warpPerspective(img2, Ht.dot(H), (xmax-xmin, ymax-ymin))
+    result[t[1]:h1+t[1],t[0]:w1+t[0]] += img1
+    return result
+
+
+""" 
+============================================
+=========  NETWORK FRAMEWORK  ============== 
+============================================
+"""
+
+def build_network(anchor_label
+                 , target_label
+                 , anchor_im
+                 , target_im
+                 , score
+                 , anchor_x_tl
+                 , anchor_y_tl
+                 , anchor_x_br
+                 , anchor_y_br
+                 , target_x_tl
+                 , target_y_tl
+                 , target_x_br
+                 , target_y_br
+                ):
+    """
+    Build a 2-node network with the given data
+    """
+    
+    G_anch_targ = nx.DiGraph()
+    # add nodes
+    G_anch_targ.add_node(anchor_label, **{"h": anchor_im.shape[0], "w": anchor_im.shape[1]})
+    G_anch_targ.add_node(target_label, **{"h": target_im.shape[0], "w": target_im.shape[1]})
+    # add edge
+    G_anch_targ.add_edge(anchor_label, target_label)
+    
+    # match score
+    nx.set_edge_attributes(G_anch_targ, {(anchor_label, target_label): score} , "score")
+
+    # anchor matched area
+    nx.set_edge_attributes(G_anch_targ, {(anchor_label, target_label): (anchor_x_tl
+                                                              , anchor_y_tl)
+                              } 
+                           , "anchor_tl")
+    nx.set_edge_attributes(G_anch_targ, {(anchor_label, target_label): (anchor_x_br
+                                                              , anchor_y_br)
+                              }
+                           , "anchor_br")
+
+    # target matched area
+    nx.set_edge_attributes(G_anch_targ, {(anchor_label, target_label): (target_x_tl
+                                                              , target_y_tl)
+                              } 
+                           , "target_tl")
+    nx.set_edge_attributes(G_anch_targ, {(anchor_label, target_label): (target_x_br
+                                                             , target_y_br)
+                              }
+                           , "target_br")
+    
+    return G_anch_targ
+
+
+def visualize_network(G
+                      , layout_style = nx.spring_layout
+                      , width_value = 'score'
+                      , width_dilatation=10
+                      , connection_style = "arc3,rad=0.2"
+                      , cmap = cm.get_cmap('RdYlGn')
+                      , figure_size=(15,10)
+                     ):
+    """
+    Plot the network as nodes and colored weighted directed edges
+    """
+    pos = layout_style(G) #nx.kamada_kawai_layout(G)
+    widths = list(nx.get_edge_attributes(G,width_value).values())
+
+    colors = [cmap(w) for w in widths]
+
+    plt.figure(figsize=figure_size)
+    nx.draw_networkx_labels(G, pos)
+    nx.draw_networkx_edges(G
+                           , pos
+                           , connectionstyle=connection_style
+                           , width=np.array(widths)*width_dilatation
+                           , edge_color=colors
+                          )
+    plt.tight_layout()
+    plt.show()
+    
+    return 
+
+
+# from https://stackoverflow.com/questions/50916422/python-typeerror-object-of-type-int64-is-not-json-serializable/50916741
+class NpEncoder(json.JSONEncoder):
+    """
+    To encode graphs when saving as .json
+    """
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super(NpEncoder, self).default(obj)
+    
+    
+    
+# Encoder keys for networkx
+encoder_dict = dict(source='anchor'
+                    , target='target'
+                    , name='label'
+                    , key='key'
+                    , link='match'
+                   )
+
+def load_json_graph(path, dict_keys=encoder_dict):
+    """
+    loads .json file as a networkx.DiGraph
+    """
+    with open(path) as f:
+        js_graph = json.load(f)
+    
+    return json_graph.node_link_graph(js_graph, directed=True, multigraph=False, attrs=dict_keys)
+
+
+def save_json_graph(G
+                    , path
+                    , dict_keys = encoder_dict
+                   ):
+    """
+    Saves networkx.DiGraph as a .json object
+    """
+    data = json_graph.node_link_data(G
+                                     , dict_keys
+                                    )
+    with open(path, 'w') as outfile:
+        json.dump(data, outfile, cls=NpEncoder)
+        
+    return
+        
+        
+        
+def warpBiNetwork(G_at
+                  , path_compose
+                  , img_ext
+                 ):
+    """
+    visualise cadastre composition based on a 2-nodes network
+    """
+    if len(G_at.edges)>1:
+        raise Exception("Method not implemented for networks with several links")
+        
+    anchor_label, target_label = list(G_at.edges)[0]
+    
+    anchor_tl = G_at.edges[anchor_label, target_label]["anchor_tl"]
+    target_tl = G_at.edges[anchor_label, target_label]["target_tl"]
+    anchor_br = G_at.edges[anchor_label, target_label]["anchor_br"]
+    target_br = G_at.edges[anchor_label, target_label]["target_br"]
+    
+    _,_,_, H  = vector_alignment(np.asarray(anchor_tl).astype(int)
+                                 , np.asarray(anchor_br).astype(int)
+                                 , np.asarray(target_tl).astype(int)
+                                 , np.asarray(target_br).astype(int)
+                                )
+    
+    anchor_im = io.imread(path_compose+anchor_label+img_ext)
+    target_im = io.imread(path_compose+target_label+img_ext)
+    warpedImages = warpTwoImages(anchor_im, target_im, H)
+
+    plt.figure(figsize=(15,15))
+    plt_plot_cv2(warpedImages)
+    plt.show()
+    
+    return warpedImages
+
+
+def test_match_network(targets
+                       , anchor_label
+                       , target_label
+                       , path_match
+                       , path_compose
+                       , img_ext
+                       , match_method = cv2.TM_CCOEFF_NORMED
+                       , annot=True
+                       , G = nx.DiGraph()
+                       , orientation_match = True
+                       , angles = np.linspace(-90, 90+1, 90)
+                      ):
+    """
+    MATCHING PROCESS
+    """
+    
+    # retrieve coordinates from innotatetd targets
+    x_corner, y_corner, template_w, template_h = targets[0][0]
+    reduced_targ_x_corner, reduced_targ_y_corner, reduced_targ_w, reduced_targ_h = targets[1][0]
+    
+    # load images to be matched —> GRAY to perform template matching
+    anchor_im = io.imread(path_match+anchor_label+img_ext)
+    target_im = io.imread(path_match+target_label+img_ext)
+    if len(anchor_im.shape)>2:
+        anchor_im = cv2.cvtColor(anchor_im, cv2.COLOR_BGR2GRAY)
+        target_im = cv2.cvtColor(target_im, cv2.COLOR_BGR2GRAY)
+    
+    # extract the innotated template from the anchor image
+    template_provided = extract_single_template(anchor_im
+                                                , top_left_corner_coordinates=(x_corner, y_corner)
+                                                , template_w=template_w
+                                                , template_h=template_h
+                                               )
+    
+    # check that the anchor template fits within the target area
+    ## if not prepare matching on the whole target image
+    if reduced_targ_w < template_w or reduced_targ_h < template_h:
+        reduced_target=target_im
+        reduced_targ_x_corner, reduced_targ_y_corner = 0,0
+    else:
+        reduced_target = extract_single_template(target_im
+                                                 , top_left_corner_coordinates=(reduced_targ_x_corner
+                                                                                , reduced_targ_y_corner)
+                                                 , template_w=reduced_targ_w
+                                                 , template_h=reduced_targ_h
+                                                )
+        
+    # perform matching ==> make independent function
+    match_score, target_tl, target_br = get_target_homologous(template = template_provided
+                                                              , target = reduced_target
+                                                              , match_method = match_method
+                                                              , orientation_match=orientation_match
+                                                              , angles = angles
+                                                             )
+    # pad in x
+    target_tl[0] += reduced_targ_x_corner
+    target_br[0] += reduced_targ_x_corner
+    # pad in y
+    target_tl[1] += reduced_targ_y_corner
+    target_br[1] += reduced_targ_y_corner
+    
+    
+    #homologous_target_x = max_loc[0]+reduced_targ_x_corner
+    #homologous_target_y = max_loc[1]+reduced_targ_y_corner
+    
+    # build/update the graph ==> make independent function
+    ## build new graph then join if ok
+    G_anch_targ = build_network(anchor_label=anchor_label
+                                , target_label=target_label
+                                , anchor_im=anchor_im
+                                , target_im=target_im
+                                , score=match_score
+                                , anchor_x_tl=x_corner
+                                , anchor_y_tl=y_corner
+                                , anchor_x_br=x_corner+template_w
+                                , anchor_y_br=y_corner+template_h
+                                , target_x_tl=target_tl[0]
+                                , target_y_tl=target_tl[1]
+                                , target_x_br=target_br[0]
+                                , target_y_br=target_br[1]
+                               )
+    
+    # DISPLAY IMAGE FROM BUILT NETWORK
+    warpBiNetwork(G_at=G_anch_targ
+                  , path_compose = path_compose
+                  , img_ext=img_ext
+                 )
+    
+    # ask if satisfactory ?
+    print("Is it OK?")
+    ok = input()
+    
+    if ok == "y":
+        G = nx.compose(G,G_anch_targ)
+        print("MATCH ADDED TO THE NETWORK\nCurrent nodes:{}".format(G.nodes))
+    else:
+        print("MATCH DISCARDED")
+    
+    return G
+
+
+
+def compute_pairwise_homographies(G):
+    """
+    Turns top left and bottom right coordinates to homographies
+    """
+    # compute all pairwise homographies
+    for edge in G.edges():
+        anchor_tl = G.edges[edge]["anchor_tl"]
+        target_tl = G.edges[edge]["target_tl"]
+        anchor_br = G.edges[edge]["anchor_br"]
+        target_br = G.edges[edge]["target_br"]
+
+        _,_,_, H  = vector_alignment(np.asarray(anchor_tl).astype(int)
+                                     , np.asarray(anchor_br).astype(int)
+                                     , np.asarray(target_tl).astype(int)
+                                     , np.asarray(target_br).astype(int)
+                                    )
+
+        nx.set_edge_attributes(G, {edge: H} 
+                               , "pairwise_homography")
+        
+    # add inverse homographies if no edge in the other direction
+    for edge in G.edges():
+        if ( (edge[1], edge[0]) not in G.edges ):
+            G.add_edge(edge[1], edge[0])
+            nx.set_edge_attributes(G, {(edge[1], edge[0]): np.linalg.inv(G.edges[edge]['pairwise_homography'])} 
+                                   , "pairwise_homography")
+                
+    
+    return G
+
+
+def buildCenteredNetwork(G, init_lab=None):
+    """
+    Build graph centered on one node with homographies computed to other nodes along shortest path
+    """
+    if init_lab==None:
+        init_lab = list(G.nodes)[0]
+    if init_lab not in G.nodes:
+        raise Exception("Wrong Initial Label. {lab} not in {nodes}".format(lab=init_lab, nodes=G.nodes))
+        
+    G_abs = nx.DiGraph()
+    G_abs.add_nodes_from([init_lab])
+    G_abs.nodes
+    
+    for node in G.nodes():
+        if (nx.has_path(G, source=init_lab , target=node)):
+            H_init_node = np.identity(3)
+
+            shortest_path = nx.algorithms.shortest_paths.generic.shortest_path(G
+                                                                               , source=init_lab
+                                                                               , target=node
+                                                                              )
+            for source, target in zip(shortest_path, shortest_path[1:]):
+                H_st = G.edges[source, target]['pairwise_homography']
+                #print(H_st)
+                H_init_node = H_init_node@H_st
+                #print(H_init_node)
+
+            G_abs.add_edge(init_lab, node)
+            nx.set_edge_attributes(G_abs, {(init_lab, node): H_init_node} , "homography")
+    
+    return G_abs
+
+
+def compose_from_network(G
+                         , path_compose
+                         , img_ext
+                         , init_lab=None
+                        ):
+    """
+    Build composite image from centered network with 'absolute' homographies
+    """
+    edges = list(G.edges)
+
+    # init composition
+    if init_lab==None:
+        init_lab = list(G.nodes)[0]
+
+    H_init = G.edges[(init_lab, init_lab)]['homography']
+
+    anchor_im = io.imread(path_compose+init_lab+img_ext)
+    target_im = io.imread(path_compose+init_lab+img_ext)
+
+    compo_cadastres = warpTwoImages(anchor_im, target_im, H_init)
+
+
+    t_x = int(0)
+    t_y = int(0)
+    for edge in edges:
+        H_edge = G.edges[(edge)]['homography']
+        # add initial image translation
+        H_edge[0,2] += t_x
+        H_edge[1,2] += t_y
+
+        target_im = io.imread(path_compose+edge[1]+img_ext)
+        compo_cadastres = warpTwoImages(compo_cadastres, target_im, H_edge)
+
+        # take translations of the initial image into account
+        if H_edge[0,2] < 0:
+            t_x -= H_edge[0,2]
+        if H_edge[1,2] < 0:
+            t_y -= H_edge[1,2]
+
+
+    return compo_cadastres
+
+
+def network2Image(G
+                  , img_ext
+                  , path_compose
+                  , init_label=None                  
+                 ):
+    """
+    Pipeline from network to image of the covered area
+    """
+    # compute homographies
+    G_homo = compute_pairwise_homographies(G.copy())
+    # Build new graph
+    G_abs = buildCenteredNetwork(G_homo
+                                 , init_lab=init_label
+                                )
+    # compose images
+    composed_cadastres_image = compose_from_network(G_abs
+                                                    , path_compose=path_compose
+                                                    , img_ext=img_ext
+                                                    , init_lab=init_label
+                                                   )
+    
+    return composed_cadastres_image

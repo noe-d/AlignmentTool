@@ -1,128 +1,26 @@
 ##### IMPORTS ############################
 from jupyter_innotater import *
 from cadastre_matching import *
-from scipy.ndimage import rotate
+#from scipy.ndimage import rotate
 from skimage import io
 
-from imutils import rotate_bound
+import os
+
+import imutils
 
 import cv2
 import matplotlib.pyplot as plt
 ##########################################
 
 def initialize_match():
+    """
+    Inquires the anchor and target labels
+    """
     
     input_anchor = input("Anchor cadaster label: ")
     input_target = input("Target cadaster label: ")
     
     return input_anchor, input_target
-
-
-def initialize_compositon(init_label
-                          , path
-                          , img_ext
-                          , annot=True
-                         ):
-    
-    init_im = io.imread(path+init_label+img_ext)#cv2.cvtColor(io.imread(path+init_label+img_ext), cv2.COLOR_BGR2GRAY)
-    h_init,w_init = init_im.shape[:2]
-
-    big_dict = {init_label: np.array([0,0])}
-
-    fig, ax = plt.subplots(figsize=(5,5))
-
-    if annot:
-        big_compo = cv2.putText(init_im.copy()
-                                ,text=init_label
-                                ,org=(w_init//2,h_init//2)
-                                ,fontFace=cv2.FONT_HERSHEY_PLAIN
-                                ,fontScale=40
-                                ,color=(255,0,0)
-                                ,thickness=80
-                               )
-        big_compo = cv2.rectangle(big_compo, (0,0), (w_init, h_init), (255,0,0), 10)
-    else: 
-        big_compo=init_im.copy()
-
-    plt_plot_cv2(big_compo)
-    
-    return big_dict, big_compo
-
-
-def test_match_grow(targets
-                    , big_compo
-                    , big_dict
-                    , path
-                    , anchor_label
-                    , target_label
-                    , img_ext
-                    , path_compose
-                    , annot=True
-                   ):
-    
-    x_corner, y_corner, template_w, template_h = targets[0][0]
-
-    reduced_targ_x_corner, reduced_targ_y_corner, reduced_targ_w, reduced_targ_h = targets[1][0]
-    
-    # Perform the matching
-    Lines_anchor = cv2.cvtColor(io.imread(path+anchor_label+img_ext), cv2.COLOR_BGR2GRAY)
-    Lines_target = cv2.cvtColor(io.imread(path+target_label+img_ext), cv2.COLOR_BGR2GRAY)
-    
-    if reduced_targ_w < template_w or reduced_targ_h < template_h:
-        reduced_target=Lines_target
-        reduced_targ_x_corner, reduced_targ_y_corner = 0,0
-    else:
-        reduced_target = extract_single_template(Lines_target
-                                             , top_left_corner_coordinates=(reduced_targ_x_corner
-                                                                            , reduced_targ_y_corner)
-                                             , template_w=reduced_targ_w
-                                             , template_h=reduced_targ_h
-                                            )
-        
-    
-    template_provided = extract_single_template(Lines_anchor
-                            , top_left_corner_coordinates=(x_corner, y_corner)
-                            , template_w=template_w
-                            , template_h=template_h
-                           )
-
-    res = cv2.matchTemplate(reduced_target,template_provided,cv2.TM_CCOEFF)
-    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-
-    homologous_target = max_loc[0]+reduced_targ_x_corner, max_loc[1]+reduced_targ_y_corner
-    
-    single_compo, _ = image_composition(im1=Lines_anchor
-                  , im2=Lines_target
-                  , homologous_points=np.array([(x_corner, y_corner), homologous_target])
-                  , label_pos = dict({})
-                  , annot=False
-                  , label='0'
-                 )
-    
-    plt.figure(figsize=(10,10))
-    plt_plot_cv2(single_compo)
-    plt.show()
-    
-    # ask if satisfactory ?
-    print("Is it OK?")
-    ok = input()
-    
-    if ok == "y":
-        img_target = io.imread(path_compose+target_label+img_ext)#, path_compose
-        big_compo, big_dict = image_composition(im1=big_compo
-                  , im2=img_target
-                  , homologous_points=np.array([np.array([x_corner, y_corner])+big_dict[anchor_label]
-                                                , np.array(homologous_target)])
-                  , label_pos = big_dict
-                  , annot=annot
-                  , label=target_label
-                 )
-        print("IMPLEMENT SAVING SCHEME")
-        
-    else:
-        print("TO BE DISCARDED")
-        
-    return big_compo, big_dict
 
 
 
@@ -250,6 +148,9 @@ def perform_selection(targets
 
 
 def orientation_angles(targets_orient):
+    """
+    compute angle based on vector
+    """
     north_vectors = [np.array([tb[1][0]-tb[0][0], tb[1][1]-tb[0][1]]) for tb in targets_orient]
     
     angles = [np.arctan(nv[1]/nv[0])*180/np.pi for nv in north_vectors]
@@ -260,7 +161,10 @@ def orientation_angles(targets_orient):
 
 
 def rotate_images(images, orientation_angles):
-    rotated_images = [rotate_bound(im, -alpha) for im, alpha in zip(images, orientation_angles)]
+    """
+    rotate a list of image according to given angles
+    """
+    rotated_images = [imutils.rotate_bound(im, -alpha) for im, alpha in zip(images, orientation_angles)]
     
     return rotated_images
 
@@ -271,6 +175,9 @@ def save_rectified_images(path
                           , new_filename_prefix
                           , img_ext
                          ):
+    """
+    save the rectified images
+    """
     assert len(rectified_images)==len(rectified_flnms)
     
     if not os.path.exists(path):
@@ -280,3 +187,116 @@ def save_rectified_images(path
         cv2.imwrite(os.path.join(path , new_filename_prefix+name+img_ext), im)
     
     return 
+
+
+
+##### DEPRECATED ############################
+
+
+def initialize_compositon(init_label
+                          , path
+                          , img_ext
+                          , annot=True
+                         ):
+    
+    init_im = io.imread(path+init_label+img_ext)#cv2.cvtColor(io.imread(path+init_label+img_ext), cv2.COLOR_BGR2GRAY)
+    h_init,w_init = init_im.shape[:2]
+
+    big_dict = {init_label: np.array([0,0])}
+
+    fig, ax = plt.subplots(figsize=(5,5))
+
+    if annot:
+        big_compo = cv2.putText(init_im.copy()
+                                ,text=init_label
+                                ,org=(w_init//2,h_init//2)
+                                ,fontFace=cv2.FONT_HERSHEY_PLAIN
+                                ,fontScale=40
+                                ,color=(255,0,0)
+                                ,thickness=80
+                               )
+        big_compo = cv2.rectangle(big_compo, (0,0), (w_init, h_init), (255,0,0), 10)
+    else: 
+        big_compo=init_im.copy()
+
+    plt_plot_cv2(big_compo)
+    
+    return big_dict, big_compo
+
+
+def test_match_grow(targets
+                    , big_compo
+                    , big_dict
+                    , path
+                    , anchor_label
+                    , target_label
+                    , img_ext
+                    , path_compose
+                    , annot=True
+                   ):
+    
+    x_corner, y_corner, template_w, template_h = targets[0][0]
+
+    reduced_targ_x_corner, reduced_targ_y_corner, reduced_targ_w, reduced_targ_h = targets[1][0]
+    
+    # Perform the matching
+    Lines_anchor = cv2.cvtColor(io.imread(path+anchor_label+img_ext), cv2.COLOR_BGR2GRAY)
+    Lines_target = cv2.cvtColor(io.imread(path+target_label+img_ext), cv2.COLOR_BGR2GRAY)
+    
+    if reduced_targ_w < template_w or reduced_targ_h < template_h:
+        reduced_target=Lines_target
+        reduced_targ_x_corner, reduced_targ_y_corner = 0,0
+    else:
+        reduced_target = extract_single_template(Lines_target
+                                             , top_left_corner_coordinates=(reduced_targ_x_corner
+                                                                            , reduced_targ_y_corner)
+                                             , template_w=reduced_targ_w
+                                             , template_h=reduced_targ_h
+                                            )
+        
+    
+    template_provided = extract_single_template(Lines_anchor
+                            , top_left_corner_coordinates=(x_corner, y_corner)
+                            , template_w=template_w
+                            , template_h=template_h
+                           )
+
+    res = cv2.matchTemplate(reduced_target,template_provided,cv2.TM_CCOEFF)
+    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+
+    homologous_target = max_loc[0]+reduced_targ_x_corner, max_loc[1]+reduced_targ_y_corner
+    
+    single_compo, _ = image_composition(im1=Lines_anchor
+                  , im2=Lines_target
+                  , homologous_points=np.array([(x_corner, y_corner), homologous_target])
+                  , label_pos = dict({})
+                  , annot=False
+                  , label='0'
+                 )
+    
+    plt.figure(figsize=(10,10))
+    plt_plot_cv2(single_compo)
+    plt.show()
+    
+    # ask if satisfactory ?
+    print("Is it OK?")
+    ok = input()
+    
+    if ok == "y":
+        img_target = io.imread(path_compose+target_label+img_ext)#, path_compose
+        big_compo, big_dict = image_composition(im1=big_compo
+                  , im2=img_target
+                  , homologous_points=np.array([np.array([x_corner, y_corner])+big_dict[anchor_label]
+                                                , np.array(homologous_target)])
+                  , label_pos = big_dict
+                  , annot=annot
+                  , label=target_label
+                 )
+        print("IMPLEMENT SAVING SCHEME")
+        
+    else:
+        print("TO BE DISCARDED")
+        
+    return big_compo, big_dict
+
+
