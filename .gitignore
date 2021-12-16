@@ -4,3 +4,6 @@ __pycache__/
 *.png
 *.jpg
 *.jpeg
+
+# Saved graphs
+*.json
