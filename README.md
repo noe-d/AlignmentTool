@@ -9,3 +9,6 @@ pip install -r requirements.txt
 ## Functionalities
 
 ## How-to-process instructions
+
+<img src="demo_material/ToolDemo.gif" alt="demo_gif" width="1200"/>
+
