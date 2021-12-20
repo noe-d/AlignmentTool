@@ -31,6 +31,25 @@ def extract_single_template(anchor_cadastre
                            ):
     """
     Extract a template from an image given its top left corner coordinates, width and height
+    
+    Input:
+        anchor_cadastre: 2D array (image)
+            image of the cadastre on which to extract the template
+        top_left_corner_coordinates: tuple or corresponding
+            coordinate in pixel values of the top-left corner of the template to be extracted
+        template_w: int (default value = 500)
+            width of the extracted template in pixels
+        template_h: int (default value = 500)
+            height of the extracted template in pixels
+    
+    Output:
+        template: 2D array (image)
+            extracted template of size template_w x template_h 
+        
+    Example:
+    extract_templates(Berney001) will return two lists of dimensions 10, 
+    the first one storing the subpart of Berney001 referred to as templates of dimensions 500x500,
+    and the second one containing the coordinate on Berney001 of the top-left corners of these templates
     """
     x_corner = top_left_corner_coordinates[0]
     y_corner = top_left_corner_coordinates[1]
@@ -324,6 +343,22 @@ def orientation_matching(template
                         ):
     """
     Template matching taking into account different possible orientations
+    
+    Input:
+        template: 2D array (image)
+            template to match on target
+        target: 2D array (image)
+            target within which to retrieve the template
+        angles: np.array/list (default value = np.linspace(-20,20,40))
+            orientations of the template to consider when applying TM
+        match_method: (default value = cv2.TM_CCOEFF_NORMED)
+            matching mode, argument given to cv2 TM function: cv2.matchTemplate
+            
+    Output:
+        best_score, best_angle, best_loc_on_target: float, float, list
+            best_score: highest score found in TM attempts
+            best_angle: angle of the best match — corresponds to best_score
+            best_loc_on_target: coordinates (px values) of the best match on the target image
     """
     best_score = 0.
     best_angle = None
@@ -345,9 +380,29 @@ def orientation_matching(template
 
     return best_score, best_angle, best_loc_on_target
 
-def shift_template(x, y, template, angle):
+def shift_template(x
+                   , y
+                   , template
+                   , angle
+                  ):
     """
-    Find the new coordinates on an image after rotation
+    Find the new coordinates of tagged point (x,y) on an image after rotation
+    
+    Input:
+        x: int
+            x coordinate of the original point
+        y: int
+            y coordinate of the original point
+        template: 2D array (image)
+            initial image 
+        angle: float
+            angle of the rotation
+            
+    Output:
+        shifted_x, shifted_y: int, int
+            shifted_x: x coordinate on the rotated image corresponding to (x,y) on the initial image
+            shifted_y: y coordinate on the rotated image corresponding to (x,y) on the initial image
+    
     """
 
     x_center_init = template.shape[1]//2
@@ -378,6 +433,24 @@ def get_target_homologous(template
                         ):
     """
     Retrieve homologous points from target based on template matching
+    
+    Input:
+        template: 2D array (image)
+            template to match on target
+        target: 2D array (image)
+            target within which to retrieve the template
+        match_method: (default value = cv2.TM_CCOEFF_NORMED)
+            matching mode, argument given to cv2 TM function: cv2.matchTemplate
+        orientation_match: bool (default value = False)
+            whether to take orientations (defined with `angles`) into consideration for TM
+        angles: np.array/list (default value = np.linspace(-20,20,40))
+            orientations of the template to consider when applying TM if `orientation_match` set to `True`
+            
+    Output:
+        best_score, target_tl, target_br: float, list, list
+            best_score: highest score found in TM attempts
+            target_tl: coordinates on the target image of the point corresponding to the top-left corner of the template
+            target_br: coordinates on the target image of the point corresponding to the bottom-right corner of the template
     """
     # define reference corners
     template_h, template_w = template.shape
@@ -417,8 +490,19 @@ def get_target_homologous(template
 def rotate(origin, point, angle):
     """
     Rotate a point counterclockwise by a given angle around a given origin.
-
-    The angle should be given in radians.
+    
+    Input:
+        origin: tuple (2D coordinate)
+            origin of the rotation
+        point: tuple (2D coordinate)
+            coordinates of the point to rotate
+        angle: float
+            angle of the rotation —> should be given in radian
+            
+    Output:
+        qx, qy: float, float
+            qx: rotated coordinate in x
+            qy: rotated coordinate in y 
     """
     ox, oy = origin
     px, py = point
@@ -434,6 +518,29 @@ def vector_alignment(a1 #arrays
                     ):
     """
     Align two vectors from different images
+    
+    vector_alignment(np.asarray(anchor_tl).astype(int)
+                                     , np.asarray(anchor_br).astype(int)
+                                     , np.asarray(target_tl).astype(int)
+                                     , np.asarray(target_br).astype(int)
+                                    )
+    
+    Input:
+        a1: np.array (2D coordinate)
+            use case: top-left coordinate of the template on the anchor image
+        a2: np.array (2D coordinate)
+            use case: bottom-right coordinate of the template on the anchor image
+        b1: np.array (2D coordinate)
+            use case: coordinate associated with the top-left corner of the template on the target image
+        b2: np.array (2D coordinate)
+            use case: coordinate associated with the bottom-right corner of the template on the target image
+            
+    Output:
+        scale, np.rad2deg(alpha), translation_vector, H: float, float, np.array 2x1, np.array 3x3
+            scale: !! HERE set to 1 | potentially rescaling factor
+            np.rad2deg(alpha): angle between the vectors (a1-a2) and (b1-b2)
+            translation_vector: [tx, ty] translation to align the vectors after rotation 
+            H: homography matrix (!! here only euclidean transformation)
     """
     v1 = a1-a2
     v2 = b1-b2
@@ -468,7 +575,21 @@ def vector_alignment(a1 #arrays
 def warpTwoImages(img1, img2, H):
     """
     warp img2 to img1 with homograph H
+    
+    Code based on:
     from https://stackoverflow.com/questions/13063201/how-to-show-the-whole-image-when-using-opencv-warpperspective
+    
+    Input:
+        img1: 2D array (image)
+            anchor image
+        img2: 2D array (image)
+            target image
+        H: 2D array (3x3 matrix)
+            homography to be applied on `img2` to wwarp it to `img1`
+            
+    Output:
+        result: 2D array (image)
+            Image resulting from the homography warping of img2 to img1
     """
     h1,w1 = img1.shape[:2]
     h2,w2 = img2.shape[:2]
@@ -508,6 +629,42 @@ def build_network(anchor_label
                 ):
     """
     Build a 2-node network with the given data
+    
+    Input:
+        anchor_label: str
+            label of the anchor
+        target_label: str
+            label of the target
+        anchor_im: int 
+            anchor image
+        target_im: int 
+            target image
+        score: float 
+            score of the match
+        anchor_x_tl: int 
+            x coordinate of the template top-left corner tag on the anchor
+        anchor_y_tl: int 
+            y coordinate of the template top-left corner tag on the anchor
+        anchor_x_br: int 
+            x coordinate of the template bottom-right corner tag on the anchor
+        anchor_y_br: int 
+            y coordinate of the template bottom-right corner tag on the anchor
+        target_x_tl: int 
+            x coordinate of the template top-left corner tag on the target
+        target_y_tl: int 
+            y coordinate of the template top-left corner tag on the target
+        target_x_br: int 
+            x coordinate of the template bottom-right corner tag on the target
+        target_y_br: int 
+            y coordinate of the template bottom-right corner tag on the target
+            
+    Output:
+        G_anch_targ: nx.Digraph
+            directed graph with
+                nodes: [anchor_label, target_label]
+                edges: [(anchor_label, target_label)]
+                    — storing the coordinates of the top-left and bottom-right tags of the template
+                      on both anchor and target
     """
     
     G_anch_targ = nx.DiGraph()
@@ -553,6 +710,7 @@ def visualize_network(G
                      ):
     """
     Plot the network as nodes and colored weighted directed edges
+    
     """
     pos = layout_style(G) #nx.kamada_kawai_layout(G)
     widths = list(nx.get_edge_attributes(G,width_value).values())
@@ -630,6 +788,19 @@ def warpBiNetwork(G_at
                  ):
     """
     visualise cadastre composition based on a 2-nodes network
+    
+    Input:
+        G_at: nx.DiGraph()
+            graph with 2 nodes linked with template tags (see `build_network` function)
+        path_compose: str
+        img_ext: str
+            should be given such that "path_compose"+node_label+"img_ext"
+            is the path of the image for node_label the nodes of G_at
+            
+    Output:
+        display plot +
+        warpedImages: 2D array (image)
+            Image resulting from the homography warping of images corresponding to the 2 nodes of the graph
     """
     if len(G_at.edges)>1:
         raise Exception("Method not implemented for networks with several links")
@@ -672,6 +843,41 @@ def test_match_network(targets
                       ):
     """
     MATCHING PROCESS
+        - performs TM
+        - display composition of anchor and target images based on the best match found
+        - ask user for evaluation
+        - discard or store match in graph
+    
+    Input:
+        targets: list
+            bounding boxes on anchor and target cadatsres
+            s.t. - targets[0][0] contains x,y top left coordinates of the bb together with its width and height
+                    on the anchor cadastre
+                 - targets[1][0] contains x,y top left coordinates of the bb together with its width and height
+                     on the target cadastre
+        anchor_label: str
+            label of the anchor cadastre
+        target_label: str
+            label of the target cadastre
+        path_match: str
+            path linking to the images on which to perform TM
+        path_compose: str
+            path linking to the images to compose
+        img_ext: str
+            image extension (should be the same for images of path_match and path_compose)
+        match_method: TM mode (default = cv2.TM_CCOEFF_NORMED)
+            matching mode, argument given to cv2 TM function: cv2.matchTemplate
+        G: nx.DiGraph (default = nx.DiGraph())
+            graph to store the matches found
+        orientation_match: bool (default = True)
+            whether to take into account several orientation (defined with `angles`) or not
+        angles: np.array (default = np.linspace(-90, 90+1, 90))
+            orientations of the template to consider when applying TM
+            
+    Output:
+        G: nx.DiGraph
+            graph updated with the match found IF accepted by the user
+            same as input one otherwise
     """
     
     # retrieve coordinates from innotatetd targets
@@ -762,7 +968,7 @@ def test_match_network(targets
 
 def compute_pairwise_homographies(G):
     """
-    Turns top left and bottom right coordinates to homographies
+    Turns top left and bottom right tagged coordinates to homographies
     """
     # compute all pairwise homographies
     for edge in G.edges():
@@ -794,6 +1000,23 @@ def compute_pairwise_homographies(G):
 def buildCenteredNetwork(G, init_lab=None):
     """
     Build graph centered on one node with homographies computed to other nodes along shortest path
+    
+    Example:
+        Input:
+            Graph with pairwise homographies stored in edges
+                 D
+                 |
+              A--B--C
+            
+            
+        Output:
+            Graph with edges storing homographies computed as the composition of the homographies
+            along the shortest path in the initial graph
+            eg. H(A->D) is obtained by composing H(A->B) and H(B->D)
+                 D
+                 ^ 
+                 |
+            B<---A--->C
     """
     if init_lab==None:
         init_lab = list(G.nodes)[0]
