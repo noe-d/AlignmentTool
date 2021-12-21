@@ -820,6 +820,7 @@ def warpBiNetwork(G_at
     
     anchor_im = io.imread(path_compose+anchor_label+img_ext)
     target_im = io.imread(path_compose+target_label+img_ext)
+
     warpedImages = warpTwoImages(anchor_im, target_im, H)
 
     plt.figure(figsize=(15,15))
