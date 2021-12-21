@@ -39,3 +39,8 @@ See on the gif below what the process can look like:
     │   └── ...                                 # 
     ├── README.md
     └── requirements.txt
+
+## Team 
+
+* Marin — [@MazarinDH](https://github.com/MazarinDH) (marin.piguet@epfl.ch)
+* Noé — [@noe-d](https://github.com/noe-d) (noe.durandard@epfl.ch)
