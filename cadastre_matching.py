@@ -555,7 +555,7 @@ def vector_alignment(a1 #arrays
     cos = (v1/norm_v1)@(v2/norm_v2).T
     alpha = -np.arccos(np.clip(cos, -1.0, 1.0)) # rad | use np.rad2deg(alpha) for conversion
     # TODO !!!! ?
-    alpha = np.sign((a1-b1)[1])*alpha
+    alpha = np.sign((v1-v2)[1])*alpha
         
     # Translation ==> translate image corresponding to b1
     s_b1 = b1*scale
