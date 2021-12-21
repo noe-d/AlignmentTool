@@ -1026,7 +1026,7 @@ def buildCenteredNetwork(G, init_lab=None):
         
     G_abs = nx.DiGraph()
     G_abs.add_nodes_from([init_lab])
-    G_abs.nodes
+    #G_abs.nodes
     
     for node in G.nodes():
         if (nx.has_path(G, source=init_lab , target=node)):
@@ -1073,19 +1073,20 @@ def compose_from_network(G
     t_x = int(0)
     t_y = int(0)
     for edge in edges:
-        H_edge = G.edges[(edge)]['homography']
-        # add initial image translation
-        H_edge[0,2] += t_x
-        H_edge[1,2] += t_y
+        if edge != (init_lab, init_lab):
+            H_edge = G.edges[(edge)]['homography']
+            # add initial image translation
+            H_edge[0,2] += t_x
+            H_edge[1,2] += t_y
 
-        target_im = io.imread(path_compose+edge[1]+img_ext)
-        compo_cadastres = warpTwoImages(compo_cadastres, target_im, H_edge)
+            target_im = io.imread(path_compose+edge[1]+img_ext)
+            compo_cadastres = warpTwoImages(compo_cadastres, target_im, H_edge)
 
-        # take translations of the initial image into account
-        if H_edge[0,2] < 0:
-            t_x -= H_edge[0,2]
-        if H_edge[1,2] < 0:
-            t_y -= H_edge[1,2]
+            # take translations of the initial image into account
+            if H_edge[0,2] < 0:
+                t_x -= H_edge[0,2]
+            if H_edge[1,2] < 0:
+                t_y -= H_edge[1,2]
 
 
     return compo_cadastres
